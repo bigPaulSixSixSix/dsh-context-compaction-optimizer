@@ -1,0 +1,18 @@
+# Context Compaction Optimizer — bundle patch (host-plane row).
+#
+# Installed through the official CLI:
+#
+#   dsh plugin --profile <name> add dsh-context-compaction-optimizer
+#
+# The command appends this package to `dsh.profile.bundles`; profile boot then
+# merges THIS patch exactly like a manual mount line. No profile file edits, and
+# no manual `cordis.patch.yml` row.
+#
+# Operator settings deliberately do NOT live in a `config:` block here. They live
+# in the `context-compaction-optimizer` namespace of `$DSH_HOME/settings.yaml`,
+# registered by the host entry through `ctx.settings`: that is the channel which
+# appears in Settings → Plugins, hot-reloads on an external edit, and stays a
+# single source of truth. A `config:` block would be a second, invisible one.
+- insert:
+    - id: context-compaction-optimizer
+      name: 'dsh-context-compaction-optimizer'

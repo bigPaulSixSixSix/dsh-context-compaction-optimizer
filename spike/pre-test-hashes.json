@@ -1,0 +1,147 @@
+﻿[
+    {
+        "Path":  ".\\00开发计划.md",
+        "Hash":  "2232A3A84F0D1767",
+        "Bytes":  56541
+    },
+    {
+        "Path":  ".\\01开发日志.md",
+        "Hash":  "C908E41354E6AA24",
+        "Bytes":  48102
+    },
+    {
+        "Path":  ".\\package.json",
+        "Hash":  "4A262E8691150A5F",
+        "Bytes":  1981
+    },
+    {
+        "Path":  ".\\package-lock.json",
+        "Hash":  "3A070E7B70DAE0E2",
+        "Bytes":  11375
+    },
+    {
+        "Path":  ".\\tsconfig.json",
+        "Hash":  "482E4ACEDF2F9E8F",
+        "Bytes":  593
+    },
+    {
+        "Path":  ".\\cordis.patch.yml",
+        "Hash":  "7E76F9EE9D8E33C9",
+        "Bytes":  817
+    },
+    {
+        "Path":  ".gitignore",
+        "Hash":  "F5FB4CEA9414EA6F",
+        "Bytes":  45
+    },
+    {
+        "Path":  ".\\src\\core\\annotations.ts",
+        "Hash":  "354F08632B46480D",
+        "Bytes":  7347
+    },
+    {
+        "Path":  ".\\src\\core\\digest.ts",
+        "Hash":  "FD5D3C815E034012",
+        "Bytes":  6474
+    },
+    {
+        "Path":  ".\\src\\core\\keys.ts",
+        "Hash":  "1B71CA0E7ACE877A",
+        "Bytes":  3316
+    },
+    {
+        "Path":  ".\\src\\host\\annotations\\domain.ts",
+        "Hash":  "6B3C77CC826C2A21",
+        "Bytes":  2744
+    },
+    {
+        "Path":  ".\\src\\host\\annotations\\service.ts",
+        "Hash":  "877215B9B089596F",
+        "Bytes":  9316
+    },
+    {
+        "Path":  ".\\src\\host\\compaction\\install.ts",
+        "Hash":  "50DAAD25C69E737A",
+        "Bytes":  2228
+    },
+    {
+        "Path":  ".\\src\\host\\compaction\\interceptor.ts",
+        "Hash":  "53D736A7178488A6",
+        "Bytes":  6005
+    },
+    {
+        "Path":  ".\\src\\host\\compaction\\observe.ts",
+        "Hash":  "5195E1FA14A361D5",
+        "Bytes":  5858
+    },
+    {
+        "Path":  ".\\src\\host\\compaction\\text.ts",
+        "Hash":  "133493D565E94FB9",
+        "Bytes":  3279
+    },
+    {
+        "Path":  ".\\src\\shared\\types.ts",
+        "Hash":  "70C1C912408A00D9",
+        "Bytes":  3697
+    },
+    {
+        "Path":  ".\\tests\\integration\\storage.test.ts",
+        "Hash":  "B25BC3A94A106571",
+        "Bytes":  6844
+    },
+    {
+        "Path":  ".\\tests\\unit\\annotations.test.ts",
+        "Hash":  "22BF5E9C45C43D04",
+        "Bytes":  6416
+    },
+    {
+        "Path":  ".\\tests\\unit\\digest.test.ts",
+        "Hash":  "A7B78847513CBCA2",
+        "Bytes":  6775
+    },
+    {
+        "Path":  ".\\tests\\unit\\interceptor.test.ts",
+        "Hash":  "939F9244421BFB8F",
+        "Bytes":  8983
+    },
+    {
+        "Path":  ".\\tests\\unit\\keys.test.ts",
+        "Hash":  "3942DD83CABE2F94",
+        "Bytes":  2613
+    },
+    {
+        "Path":  ".\\tests\\unit\\observe.test.ts",
+        "Hash":  "EF8428324BFB2154",
+        "Bytes":  4991
+    },
+    {
+        "Path":  ".\\scripts\\probe-cordis.ts",
+        "Hash":  "F677C0910217202F",
+        "Bytes":  1320
+    },
+    {
+        "Path":  ".\\scripts\\probe-deps.ts",
+        "Hash":  "130B722D2BFD54C1",
+        "Bytes":  1129
+    },
+    {
+        "Path":  ".\\scripts\\run-tests.ts",
+        "Hash":  "01FE637FDC1370EB",
+        "Bytes":  987
+    },
+    {
+        "Path":  ".\\spike\\cordis.patch.yml.backup",
+        "Hash":  "EF189A8C27DB6D63",
+        "Bytes":  217
+    },
+    {
+        "Path":  ".\\spike\\m3-entry\\index.ts",
+        "Hash":  "5FA0DC032BB41200",
+        "Bytes":  7365
+    },
+    {
+        "Path":  ".\\spike\\packaged-probe\\index.js",
+        "Hash":  "51FC0CBA12BDB71F",
+        "Bytes":  5594
+    }
+]

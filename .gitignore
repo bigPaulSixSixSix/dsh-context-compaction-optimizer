@@ -1,0 +1,40 @@
+# ── dependencies ───────────────────────────────────────────────────────────
+node_modules/
+
+# ── build output ───────────────────────────────────────────────────────────
+# `npm run build` produces these from src/. They are deliberately not tracked,
+# and `prepublishOnly` rebuilds them so a publish can never ship a stale build.
+# Anyone installing from a git URL gets no lib/ — install from npm, or run
+# `npm run build` first.
+lib/
+
+# ── package-manager state ──────────────────────────────────────────────────
+# Kept inside the workspace so npm can run under a sandbox that cannot write
+# outside it; the contents are tens of megabytes of cache and must not ship.
+.npm-cache/
+*.tsbuildinfo
+
+# ── pack and install artifacts ─────────────────────────────────────────────
+*.tgz
+npm-debug.log*
+yarn-error.log*
+
+# ── OS and editor cruft ────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+
+# ── local working documents ────────────────────────────────────────────────
+# The plan and the development log are how this project is run, not what it
+# ships. Everything of that kind goes here, so this one entry covers all of it.
+local_docs/
+
+# ── local secrets ──────────────────────────────────────────────────────────
+# No credential file exists in this tree and none is expected — every DSH
+# credential lives under $DSH_HOME. These patterns are here so a file created
+# later is never one `git add .` away from a public repository.
+.env
+.env.*
+*.local

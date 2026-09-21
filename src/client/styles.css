@@ -1,0 +1,311 @@
+/*
+ * Context Compaction Optimizer — client styles.
+ *
+ * A real stylesheet rather than a template literal, for two reasons. First,
+ * hover and attribute states are inexpressible in inline styles. Second, and
+ * learned the hard way: this file started life inside a JS template literal, and
+ * prose in a comment that used backticks silently CLOSED the literal — the CSS
+ * then failed to parse as TypeScript, twice. A `.css` file cannot have that
+ * problem, and esbuild inlines it as text.
+ *
+ * The `.cco-*` class names here must match the CLASS map in `styles.ts`; a test
+ * asserts the two stay in sync, because nothing else would notice a rename.
+ *
+ * Every value is taken from a harness component that lives in the same place:
+ * the `.cco-action` metrics from `@deepseek-ai/dsh-client-ui-message-feedback`
+ * (the per-message action row), the `.cco-trigger` typography from the session
+ * header's own label element, and the `.cco-settings*` layout from
+ * `@deepseek-ai/dsh-client-ui-settings-plugins` (the Plugins settings cards).
+ * Colours are the harness's own theme tokens; there are no typography tokens to
+ * bind to, so the few font sizes are copied values and will need revisiting if
+ * the harness retypes those rows.
+ */
+
+/* ── action button (the inline per-message toggle) ─────────────────────────── */
+
+.cco-action {
+  width: calc(28px + var(--dsh-content-font-delta, 0px));
+  height: calc(28px + var(--dsh-content-font-delta, 0px));
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+  background: 0 0;
+  border: none;
+  border-radius: 28px;
+  justify-content: center;
+  align-items: center;
+  padding: 6px;
+  display: inline-flex;
+}
+.cco-action svg {
+  width: calc(15px + var(--dsh-content-font-delta, 0px));
+  height: calc(15px + var(--dsh-content-font-delta, 0px));
+}
+.cco-action:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+}
+.cco-action:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+.cco-action[data-state='invalid'] {
+  color: var(--dsw-alias-state-error-primary);
+}
+.cco-action[data-state='invalid']:hover {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+/* ── header trigger ───────────────────────────────────────────────────────── */
+
+/*
+ * Deliberately NOT a fixed square. An earlier version reused the 28px round
+ * button and painted the count inside it, so the glyph and the number competed
+ * for one box and the icon shrank the moment a count existed. Here the icon is
+ * excluded from shrinking, the count flows beside it, and the button grows, so
+ * the hover wash widens with it.
+ */
+.cco-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: calc(28px + var(--dsh-content-font-delta, 0px));
+  padding: 0 6px;
+  overflow: hidden;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+  background: 0 0;
+  border: none;
+  border-radius: 28px;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 22px;
+}
+.cco-trigger:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+}
+.cco-trigger:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+.cco-trigger[data-state='invalid'] {
+  color: var(--dsw-alias-state-error-primary);
+}
+.cco-trigger svg {
+  flex: 0 0 auto;
+  width: calc(15px + var(--dsh-content-font-delta, 0px));
+  height: calc(15px + var(--dsh-content-font-delta, 0px));
+}
+.cco-count {
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── overlay panel ────────────────────────────────────────────────────────── */
+
+.cco-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--dsw-alias-bg-base) 55%, transparent);
+  z-index: 1000;
+}
+.cco-card {
+  display: flex;
+  flex-direction: column;
+  width: min(760px, 92vw);
+  max-height: 82vh;
+  background: var(--dsw-alias-bg-overlay);
+  color: var(--dsw-alias-label-primary);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.cco-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+.cco-card-body {
+  overflow-y: auto;
+  flex: 1;
+}
+.cco-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+.cco-row[data-notext] .cco-row-text {
+  color: var(--dsw-alias-label-tertiary);
+  font-style: italic;
+}
+.cco-row-meta {
+  flex: 0 0 auto;
+  width: 72px;
+  color: var(--dsw-alias-label-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.cco-row-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cco-row-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+}
+.cco-stat {
+  color: var(--dsw-alias-label-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── manual compaction (M5) ───────────────────────────────────────────────── */
+
+/*
+ * The forecast is the safety surface, not decoration: it states the consequence
+ * of confirming *before* anything happens, in the operator's own terms ("drop N,
+ * keep M") rather than in counters. It sits directly under the title so it is
+ * read before the list rather than after it.
+ */
+.cco-forecast {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Row = one turn (N035). The step list is nested, read-only, and visually
+ * subordinate so the exchange stays the thing being acted on. */
+
+.cco-disclosure {
+  flex: 0 0 auto;
+  width: 16px;
+  padding: 0;
+  border: none;
+  background: 0 0;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+  font-size: 10px;
+  line-height: 1;
+}
+.cco-disclosure[aria-expanded='true'] {
+  color: var(--dsw-alias-label-secondary);
+}
+.cco-row-steps {
+  flex: 0 0 auto;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.cco-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 16px 4px 40px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+}
+.cco-step .cco-row-text {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.cco-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+/*
+ * The confirm affordance is separated from the annotation toolbar: marking and
+ * compacting are different acts, and the one that costs an LLM call and rewrites
+ * the surface should not sit in the same undifferentiated row as a toggle.
+ */
+.cco-footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--dsw-alias-border-l1);
+}
+.cco-result {
+  color: var(--dsw-alias-label-secondary);
+}
+.cco-result[data-state='error'] {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+/* ── buttons and text ─────────────────────────────────────────────────────── */
+
+.cco-btn {
+  padding: 4px 10px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 6px;
+  background: 0 0;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.cco-btn:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+.cco-btn-danger {
+  color: var(--dsw-alias-state-error-primary);
+}
+.cco-error {
+  color: var(--dsw-alias-state-error-primary);
+}
+.cco-hint {
+  margin: 0;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* ── settings layout ──────────────────────────────────────────────────────── */
+
+/*
+ * Copied from the Plugins settings cards: a grid of rows with 6px gaps and 12px
+ * vertical padding, a 13px/1.5 label row that pushes its control to the far
+ * edge, and a 12px/1.5 tertiary hint underneath.
+ */
+.cco-settings {
+  display: grid;
+  gap: 6px;
+}
+.cco-settings-row {
+  display: grid;
+  gap: 6px;
+  padding: 12px 0;
+}
+.cco-toggle-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.cco-toggle-label {
+  flex: 1;
+  min-width: 0;
+}
