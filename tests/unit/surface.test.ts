@@ -254,3 +254,39 @@ test('a surface message no turn encloses becomes its own group', () => {
   assert.equal(turns[1]?.id, 'loose:50');
   assert.equal(turns[1]?.messages[0]?.messageId, 'u-checkpoint');
 });
+
+/**
+ * N049. A compacted surface is **not** seq-ascending: the checkpoint replaces the
+ * summarized prefix, so it is placed before the verbatim-retained tail, whose
+ * seqs are lower. Grouping is a merge over turn ranges and needs true seq order —
+ * using the surface's own order dropped straight out of the range and emitted one
+ * bogus single-message group per message, on every compacted session. This was
+ * measured on a live host, not hypothesised: `seqAscending=false` on a session
+ * whose surface began `[6636 checkpoint, 6606, 6608, …]`.
+ */
+test('a checkpoint placed ahead of the retained tail still groups by seq', () => {
+  const turns = listTurns(
+    sessionWithLog(
+      [50, 10, 11],
+      {
+        2: turnStart(2),
+        15: turnEnd(15),
+        10: userAt(10, 'u-1', 'prompt'),
+        11: assistantAt(11, 'a-1', 'answer'),
+        50: userAt(50, 'u-checkpoint', 'This is an automatically generated checkpoint'),
+      },
+      60,
+    ),
+  );
+
+  assert.deepEqual(
+    turns.map((turn) => turn.id),
+    ['turn:10', 'loose:50'],
+    'the retained pair must stay one turn, and the checkpoint its own group',
+  );
+  assert.deepEqual(
+    turns[0]?.messages.map((message) => message.seq),
+    [10, 11],
+  );
+  assert.equal(turns[1]?.messages[0]?.messageId, 'u-checkpoint');
+});

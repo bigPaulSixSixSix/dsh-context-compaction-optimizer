@@ -69,6 +69,11 @@ export function apply(ctx: ClientContext): void {
 
   ctx.effect(() => ctx.locale.register(NS, dictionaries), 'context-compaction-optimizer: dictionaries');
 
+  // The controller schedules retries, which outlive the call that started them;
+  // unloading the plugin must not leave a timer waking up to talk to a host that
+  // no longer has this client.
+  ctx.effect(() => () => controller.dispose(), 'context-compaction-optimizer: controller');
+
   // The nav label lives outside any slot component, so it cannot use a slot's
   // `t`; `bind` gives it the same dictionary, resolved at call time.
   const bound: (key: string) => string =

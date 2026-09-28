@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { AnnotationController, turnStatus } from '../../src/client/store.ts';
-import type { RpcClient } from '../../src/client/rpc.ts';
+import { AnnotationController, DEFAULT_RETRY_DELAYS_MS, turnStatus } from '../../src/client/store.ts';
+import { RpcError, type RpcClient } from '../../src/client/rpc.ts';
 import type { AnnotationRecord, SurfaceMessage, SurfaceTurn } from '../../src/shared/types.ts';
 
 const SESSION = 'session-1';
@@ -26,14 +26,15 @@ interface Harness {
   setRecords(records: readonly AnnotationRecord[]): void;
   /** Replace the live surface, as a new exchange or a compaction would. */
   setTurns(turns: readonly SurfaceTurn[]): void;
-  failNext(method: string, message: string): void;
+  /** Fail the next call of one method, with the host code it would carry. */
+  failNext(method: string, message: string, code?: string): void;
 }
 
 function harness(initial: readonly AnnotationRecord[] = []): Harness {
   let records = [...initial];
   let turns: readonly SurfaceTurn[] = fixture();
   const calls: { method: string; params: Record<string, unknown> }[] = [];
-  const failures = new Map<string, string>();
+  const failures = new Map<string, { message: string; code: string }>();
 
   const rpc: RpcClient = {
     async tryCall() {
@@ -44,7 +45,10 @@ function harness(initial: readonly AnnotationRecord[] = []): Harness {
       const failure = failures.get(method);
       if (failure !== undefined) {
         failures.delete(method);
-        throw new Error(failure);
+        // A real `RpcError`, not a bare `Error`: the retry decision reads the
+        // host's code, so a test double without one would exercise the wrong
+        // branch of it.
+        throw new RpcError(failure.code, failure.message);
       }
       switch (method) {
         case 'annotations.list':
@@ -82,8 +86,8 @@ function harness(initial: readonly AnnotationRecord[] = []): Harness {
     setTurns(next) {
       turns = [...next];
     },
-    failNext(method, failure) {
-      failures.set(method, failure);
+    failNext(method, failure, code = 'internal') {
+      failures.set(method, { message: failure, code });
     },
   };
 }
@@ -117,7 +121,7 @@ test('load populates turns, records and per-turn stats', async () => {
   await controller.load(SESSION);
 
   const view = controller.view(SESSION);
-  assert.equal(view.loaded, true);
+  assert.equal(view.phase, 'ready');
   assert.equal(view.error, null);
   assert.equal(view.turns.length, 3, 'the unit is the turn, not the message');
   assert.equal(view.messages.length, 4, 'messages stay available for membership checks');
@@ -126,6 +130,10 @@ test('load populates turns, records and per-turn stats', async () => {
   assert.deepEqual(view.stats, { total: 3, valid: 0, invalid: 1, unmarked: 2 });
 });
 
+/**
+ * A failure that another identical attempt cannot fix is terminal and reported
+ * immediately — no retry, and no throwing at the caller.
+ */
 test('a load failure is surfaced on the view rather than thrown', async () => {
   const h = harness();
   h.failNext('annotations.list', 'storage exploded');
@@ -134,9 +142,14 @@ test('a load failure is surfaced on the view rather than thrown', async () => {
   await controller.load(SESSION);
 
   const view = controller.view(SESSION);
-  assert.equal(view.loaded, true);
+  assert.equal(view.phase, 'failed');
   assert.match(view.error ?? '', /storage exploded/);
   assert.equal(view.turns.length, 0);
+  assert.equal(
+    h.calls.filter((call) => call.method === 'annotations.list').length,
+    1,
+    'an internal failure must not be retried',
+  );
 });
 
 /**
@@ -320,7 +333,7 @@ test('two sessions keep independent views', async () => {
   await controller.load(SESSION);
 
   const other = controller.view('session-2');
-  assert.equal(other.loaded, false);
+  assert.equal(other.phase, 'idle');
   assert.notEqual(other, controller.view(SESSION));
 });
 
@@ -373,7 +386,7 @@ test('refreshSurface picks up new turns and preserves annotations', async () => 
   assert.equal(view.stats.total, 4);
   assert.equal(view.stats.invalid, 1, 'annotations must survive a surface-only refresh');
   assert.equal(view.byMessageId.get('m-2'), 'invalid');
-  assert.equal(view.loaded, true);
+  assert.equal(view.phase, 'ready');
 });
 
 test('refreshSurface keeps the snapshot identity when the surface is unchanged', async () => {
@@ -399,4 +412,188 @@ test('a failed refresh keeps the last good list instead of blanking the panel', 
   assert.equal(view.turns.length, 3);
   assert.equal(view.stats.total, 3);
   assert.equal(view.error, null, 'a failed refresh is not a load error');
+});
+
+/** A scheduler that captures retries so a test can run them by hand. */
+function retryRecorder(): { schedule: (run: () => void, delayMs: number) => () => void; pending: (() => void)[]; delays: number[] } {
+  const pending: (() => void)[] = [];
+  const delays: number[] = [];
+  return {
+    pending,
+    delays,
+    schedule(run, delayMs) {
+      pending.push(run);
+      delays.push(delayMs);
+      return () => undefined;
+    },
+  };
+}
+
+/**
+ * N048. The host projects only sessions that are live in its process, so a read
+ * issued before the host has loaded the session fails with `not-found`. That is
+ * a timing fact, and treating it as terminal is what left every annotation
+ * control grey and unclickable for good.
+ */
+test('a not-found read is retried until the host has the session', async () => {
+  const h = harness();
+  const recorder = retryRecorder();
+  const controller = new AnnotationController(h.rpc, { schedule: recorder.schedule });
+
+  // The first read loses the race; the retry finds the session loaded.
+  h.failNext('session.surface', 'unknown session session-1', 'not-found');
+  await controller.load(SESSION);
+
+  const waiting = controller.view(SESSION);
+  assert.equal(waiting.phase, 'loading', 'a retryable failure is a load in progress, not a verdict');
+  assert.equal(waiting.error, null, 'nothing to report while it is still trying');
+  assert.equal(recorder.pending.length, 1, 'exactly one retry was scheduled');
+
+  (recorder.pending.shift() as () => void)();
+  await controller.load(SESSION);
+
+  const view = controller.view(SESSION);
+  assert.equal(view.phase, 'ready', 'the retry must be what makes the surface available');
+  assert.equal(view.turns.length, 3);
+  assert.equal(recorder.pending.length, 0, 'a success stops the schedule');
+});
+
+/**
+ * The other half of the contract: retrying is bounded, and running out is a
+ * state the operator can read rather than a spinner that never resolves.
+ *
+ * Only *consecutive* retries exhaust the schedule: each explicit `load` — a
+ * mount, the reload button, a panel open — restarts it, which is what an
+ * operator asking again should get. So this drives the retries by hand instead
+ * of calling `load` between them; the extra `load` calls made while a retry is
+ * in flight resolve against it rather than starting a rival attempt.
+ */
+test('a session the host never loads ends in an explicit, reported state', async () => {
+  const h = harness();
+  const recorder = retryRecorder();
+  const controller = new AnnotationController(h.rpc, {
+    schedule: recorder.schedule,
+    retryDelaysMs: [10, 10],
+  });
+  const unreachable = (): void => h.failNext('session.surface', 'unknown session session-1', 'not-found');
+
+  unreachable();
+  await controller.load(SESSION);
+  assert.equal(controller.view(SESSION).phase, 'loading', 'the first failure schedules a retry');
+  assert.equal(recorder.pending.length, 1);
+
+  // `[10, 10]` buys exactly two retries: the first is scheduled by the initial
+  // failure, the second by that retry, and the second retry is the terminal one.
+  unreachable();
+  (recorder.pending.shift() as () => void)();
+  await controller.load(SESSION);
+  assert.equal(controller.view(SESSION).phase, 'loading', 'one retry remains');
+  assert.equal(recorder.pending.length, 1);
+
+  unreachable();
+  (recorder.pending.shift() as () => void)();
+  await controller.load(SESSION);
+
+  const view = controller.view(SESSION);
+  assert.equal(view.phase, 'session-not-loaded');
+  assert.match(view.error ?? '', /unknown session/, 'the host message is kept for the operator');
+  assert.equal(recorder.pending.length, 0, 'the schedule must be finite');
+});
+
+/** Asking again must restart the schedule rather than resume an exhausted one. */
+test('an explicit reload restarts an exhausted retry schedule', async () => {
+  const h = harness();
+  const recorder = retryRecorder();
+  const controller = new AnnotationController(h.rpc, {
+    schedule: recorder.schedule,
+    retryDelaysMs: [10],
+  });
+
+  h.failNext('session.surface', 'unknown session session-1', 'not-found');
+  await controller.load(SESSION);
+  h.failNext('session.surface', 'unknown session session-1', 'not-found');
+  (recorder.pending.shift() as () => void)();
+  await controller.load(SESSION);
+  assert.equal(controller.view(SESSION).phase, 'session-not-loaded', 'the schedule is spent');
+
+  h.failNext('session.surface', 'unknown session session-1', 'not-found');
+  await controller.load(SESSION);
+
+  assert.equal(controller.view(SESSION).phase, 'loading', 'the reload button gets a fresh schedule');
+  assert.equal(recorder.pending.length, 1);
+});
+
+/** Two controls mounting together must not produce two round trips. */
+test('concurrent loads share one round trip', async () => {
+  const h = harness();
+  const controller = new AnnotationController(h.rpc);
+
+  await Promise.all([controller.load(SESSION), controller.load(SESSION)]);
+
+  assert.equal(h.calls.filter((call) => call.method === 'session.surface').length, 1);
+  assert.equal(h.calls.filter((call) => call.method === 'annotations.list').length, 1);
+});
+
+/**
+ * A refresh that succeeds proves the host can serve the session, so it must also
+ * lift a terminal phase — otherwise a session whose first read lost the race
+ * would stay disabled even after its surface arrived.
+ */
+test('a successful refresh clears a terminal phase', async () => {
+  const h = harness();
+  const controller = new AnnotationController(h.rpc, { retryDelaysMs: [] });
+  h.failNext('session.surface', 'unknown session session-1', 'not-found');
+
+  await controller.load(SESSION);
+  assert.equal(controller.view(SESSION).phase, 'session-not-loaded');
+
+  await controller.refreshSurface(SESSION);
+
+  assert.equal(controller.view(SESSION).phase, 'ready');
+  assert.equal(controller.view(SESSION).turns.length, 3);
+});
+
+/** The default schedule must be finite for the terminal state to be reachable. */
+test('the default retry schedule is finite and front-loaded', () => {
+  assert.ok(DEFAULT_RETRY_DELAYS_MS.length > 0, 'a transient failure must be retried at all');
+  assert.ok(
+    DEFAULT_RETRY_DELAYS_MS.every((delay) => Number.isFinite(delay) && delay > 0),
+    'every delay must be a real wait',
+  );
+  const total = DEFAULT_RETRY_DELAYS_MS.reduce((sum, delay) => sum + delay, 0);
+  assert.ok(total <= 60_000, `the schedule must give up within a minute, saw ${total}ms`);
+});
+
+/**
+ * N049. After a compaction most of a conversation leaves the surface, so the
+ * rows the operator still sees carry ids the surface does not hold. Asking for a
+ * re-read on every render would put one request behind every row and never
+ * succeed; asking once per id both bounds the traffic and turns "no turns for
+ * this message" into a fact the UI can state.
+ */
+test('a message the surface does not hold is asked about once, then reported', async () => {
+  const h = harness();
+  const controller = new AnnotationController(h.rpc);
+  await controller.load(SESSION);
+
+  assert.equal(controller.isOffSurface(SESSION, 'm-gone'), false, 'nothing is known before the ask');
+  assert.equal(controller.needsRefreshFor(SESSION, 'm-gone'), true, 'the first ask goes out');
+  assert.equal(controller.needsRefreshFor(SESSION, 'm-gone'), false, 'and never again');
+  assert.equal(controller.isOffSurface(SESSION, 'm-gone'), true, 'so the UI can say it is gone');
+
+  // The store itself must not fire refreshes: `needsRefreshFor` is a decision the
+  // caller asks for, so the traffic stays where the render is.
+  const refreshes = h.calls.filter((call) => call.method === 'session.surface').length;
+  assert.equal(refreshes, 1, 'only the load read the surface');
+});
+
+test('an id that is on the surface is never reported as off it', async () => {
+  const h = harness();
+  const controller = new AnnotationController(h.rpc);
+  await controller.load(SESSION);
+
+  assert.equal(controller.knows(SESSION, 'm-1'), true);
+  assert.equal(controller.isOffSurface(SESSION, 'm-1'), false);
+  assert.equal(controller.needsRefreshFor(SESSION, null), false, 'an id-less message cannot be asked about');
+  assert.equal(controller.isOffSurface(SESSION, null), false);
 });

@@ -89,8 +89,11 @@ export function PanelTrigger(props: PanelTriggerProps): React.ReactElement {
   const label = translate('panel.trigger');
 
   React.useEffect(() => {
-    if (!view.loaded) void controller.load(sessionId);
-  }, [controller, sessionId, view.loaded]);
+    // `idle` only. The controller retries a transient failure on its own, so
+    // re-issuing a load for every terminal phase would restart that schedule
+    // forever; an explicit reload is what the toolbar button is for.
+    if (view.phase === 'idle') void controller.load(sessionId);
+  }, [controller, sessionId, view.phase]);
 
   const count = view.stats.invalid;
 
@@ -156,6 +159,50 @@ function turnPreview(turn: SurfaceTurn, translate: Translate): string {
   if (closing !== null) return head(closing);
   const first = turn.messages[0];
   return first === undefined ? '' : head(first);
+}
+
+/** One line of muted explanation inside the panel body. */
+function hintLine(text: string, detail?: string | null): React.ReactElement {
+  const children: (string | React.ReactElement)[] = [text];
+  if (detail !== undefined && detail !== null && detail.length > 0) {
+    children.push(React.createElement('div', { style: { marginTop: '4px' } }, detail));
+  }
+  return React.createElement(
+    'div',
+    { className: CLASS.hint, style: { padding: '12px 16px' } },
+    ...children,
+  );
+}
+
+/**
+ * The panel body: the rows, or the one honest reason there are none (N048).
+ *
+ * "No annotatable turns" and "the surface could not be read" both leave `rows`
+ * empty, and showing the first for the second is simply false — it was the
+ * reason a dead button had no explanation anywhere in the UI. Each phase now
+ * says what it is, and a terminal failure carries the host's own message.
+ */
+function panelBody(
+  view: AnnotationView,
+  rows: React.ReactElement[],
+  translate: Translate,
+): React.ReactNode {
+  if (view.phase === 'ready') {
+    const body = rows.length === 0 ? [hintLine(translate('panel.empty'))] : rows;
+    // A `ready` view carrying an error can only be a failed write: every
+    // successful read clears it, and `setStatus` re-reads before recording the
+    // failure. Until now that error had nowhere to appear — the same silence
+    // that hid the surface failures.
+    if (view.error === null) return body;
+    return [hintLine(translate('error.save'), view.error), ...body];
+  }
+  if (view.phase === 'session-not-loaded') {
+    return hintLine(translate('panel.sessionNotLoaded'), view.error);
+  }
+  if (view.phase === 'failed') {
+    return hintLine(translate('error.load'), view.error);
+  }
+  return hintLine(translate('panel.loading'));
 }
 
 function summaryLine(view: AnnotationView, translate: Translate): string {
@@ -392,19 +439,7 @@ export function PanelOverlay(props: PanelOverlayProps): React.ReactElement | nul
       React.createElement(
         'div',
         { className: CLASS.cardBody },
-        !view.loaded
-          ? React.createElement(
-              'div',
-              { className: CLASS.hint, style: { padding: '12px 16px' } },
-              translate('panel.loading'),
-            )
-          : rows.length === 0
-            ? React.createElement(
-                'div',
-                { className: CLASS.hint, style: { padding: '12px 16px' } },
-                translate('panel.empty'),
-              )
-            : rows,
+        panelBody(view, rows, translate),
       ),
       React.createElement(
         'div',

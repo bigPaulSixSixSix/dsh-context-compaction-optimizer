@@ -29,6 +29,7 @@ import '../tests/unit/composition.test.ts';
 import '../tests/unit/client-rpc.test.ts';
 import '../tests/unit/client-store.test.ts';
 import '../tests/unit/client-styles.test.ts';
+import '../tests/unit/client-locale.test.ts';
 // Built-artifact contract tests; skipped until `npm run build` has produced lib/.
 import '../tests/unit/bundle.test.ts';
 

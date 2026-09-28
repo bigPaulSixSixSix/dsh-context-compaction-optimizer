@@ -25,6 +25,14 @@
  *    so the list has to track the live surface rather than being read once: a
  *    turn that arrives afterwards would otherwise be invisible to the counter
  *    and missing from the panel.
+ * 4. **The surface read waits for the host to load the session** (N048). The
+ *    host projects only sessions that are live in its process, so a read issued
+ *    before the session is loaded fails with `not-found` — a *timing* fact, not
+ *    a verdict. Every annotation control is dead until a read succeeds, so an
+ *    early read that is never retried leaves them dead permanently, which is
+ *    exactly what happened. {@link AnnotationView.phase} is the single home of
+ *    that state, and the schedule below retries a transient failure until the
+ *    session appears.
  *
  * @module dsh-context-compaction-optimizer/client/store
  */
@@ -40,6 +48,25 @@ import type {
 } from '../shared/types.ts';
 import type { RpcClient } from './rpc.ts';
 
+/**
+ * Where the surface read stands.
+ *
+ * One field rather than several booleans, because "we have no turns" has three
+ * different meanings an operator must be able to tell apart: the host has not
+ * loaded the session yet, the read failed, or the session genuinely has none.
+ */
+export type SurfacePhase =
+  /** No read has been attempted yet. */
+  | 'idle'
+  /** A read is in flight, or a transient failure is waiting to be retried. */
+  | 'loading'
+  /** The turns are here. Every control is live. */
+  | 'ready'
+  /** The host has no live session for this id; retries are exhausted. */
+  | 'session-not-loaded'
+  /** The read failed for any other reason; retries are exhausted. */
+  | 'failed';
+
 /** Immutable view of one session's annotation state. */
 export interface AnnotationView {
   readonly sessionId: string;
@@ -49,22 +76,21 @@ export interface AnnotationView {
   readonly turns: readonly SurfaceTurn[];
   /** The same messages flattened, for membership checks and comparisons. */
   readonly messages: readonly SurfaceMessage[];
-  readonly loaded: boolean;
+  readonly phase: SurfacePhase;
+  /** The host's own message for the last terminal failure, else `null`. */
   readonly error: string | null;
 }
 
 type Listener = () => void;
 
-const EMPTY_STATS: AnnotationStats = { total: 0, valid: 0, invalid: 0, unmarked: 0 };
-
 function emptyView(sessionId: string): AnnotationView {
   return {
     sessionId,
     byMessageId: new Map(),
-    stats: EMPTY_STATS,
+    stats: { total: 0, valid: 0, invalid: 0, unmarked: 0 },
     turns: [],
     messages: [],
-    loaded: false,
+    phase: 'idle',
     error: null,
   };
 }
@@ -150,15 +176,90 @@ function sameTurns(a: readonly SurfaceTurn[], b: readonly SurfaceTurn[]): boolea
   return true;
 }
 
+/**
+ * Timer used to schedule a retry, returning its own cancel.
+ *
+ * Injected so the retry schedule is testable without real clocks: a test passes
+ * a scheduler that captures the callback and runs it when it chooses.
+ */
+export type RetryScheduler = (run: () => void, delayMs: number) => () => void;
+
+/** Controller options. Both default; tests inject both. */
+export interface AnnotationControllerOptions {
+  readonly schedule?: RetryScheduler;
+  readonly retryDelaysMs?: readonly number[];
+}
+
+const defaultSchedule: RetryScheduler = (run, delayMs) => {
+  const handle = setTimeout(run, delayMs);
+  return () => clearTimeout(handle);
+};
+
+/**
+ * Delays between surface-read attempts, in order.
+ *
+ * The wait is for the host to load the session, which normally happens within a
+ * moment of the page asking for it, so the schedule is front-loaded and totals
+ * about 20 seconds. It is deliberately finite: an operator who is still looking
+ * at a session the host never loaded needs a stated reason, not a spinner that
+ * never resolves. Nine entries means nine retries after the first attempt.
+ */
+export const DEFAULT_RETRY_DELAYS_MS: readonly number[] = [250, 500, 1000, 2000, 4000, 4000, 4000, 4000];
+
+/**
+ * Failure codes worth retrying.
+ *
+ * `not-found` is the documented "the host has no live session for this id" and
+ * resolves itself as soon as the session is loaded. `transport` is a fetch that
+ * never reached the host, which a restart explains. Everything else — a
+ * malformed response, a rejected request, an internal error — is a real fault
+ * that another identical attempt will not fix, so it fails immediately and says
+ * so instead of looking like a slow load.
+ */
+const TRANSIENT_CODES = new Set(['not-found', 'transport']);
+
+/** The failure code carried by an error, if it names one. */
+function codeOf(error: unknown): string {
+  if (typeof error === 'object' && error !== null) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === 'string' && code.length > 0) return code;
+  }
+  return 'transport';
+}
+
 /** Per-session annotation state with optimistic writes. */
 export class AnnotationController {
   readonly #rpc: RpcClient;
   readonly #views = new Map<string, AnnotationView>();
   readonly #listeners = new Set<Listener>();
   #policy: UnmarkedPolicy = 'valid';
+  readonly #schedule: RetryScheduler;
+  readonly #retryDelays: readonly number[];
+  /** Attempts already spent per session, indexed into `#retryDelays`. */
+  readonly #attempts = new Map<string, number>();
+  /** Cancel handle for a scheduled retry, per session. */
+  readonly #retries = new Map<string, () => void>();
+  /** The in-flight read per session, so concurrent callers share one. */
+  readonly #inflight = new Map<string, Promise<void>>();
+  /** Message ids a control has already asked a surface re-read for, per session. */
+  readonly #askedFor = new Map<string, Set<string>>();
 
-  constructor(rpc: RpcClient) {
+  constructor(rpc: RpcClient, options: AnnotationControllerOptions = {}) {
     this.#rpc = rpc;
+    this.#schedule = options.schedule ?? defaultSchedule;
+    this.#retryDelays = options.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
+  }
+
+  /**
+   * Cancel every pending retry.
+   *
+   * Retries outlive the call that scheduled them, so a controller that is torn
+   * down must not keep waking up to talk to a host that no longer has a client.
+   */
+  dispose(): void {
+    this.#cancelRetry();
+    this.#inflight.clear();
+    this.#askedFor.clear();
   }
 
   /** Mirror the host's unmarked policy so local counts match the server's. */
@@ -227,6 +328,39 @@ export class AnnotationController {
   }
 
   /**
+   * Whether a control should ask for a surface re-read because of one message.
+   *
+   * True once per id. Past that first ask, the id is one the surface genuinely
+   * does not hold — a message a compaction folded into a checkpoint, which can
+   * never come back — so asking again would put one request behind every row of
+   * a compacted conversation and still never succeed (N049).
+   */
+  needsRefreshFor(sessionId: string, messageId: string | null): boolean {
+    if (messageId === null) return false;
+    let asked = this.#askedFor.get(sessionId);
+    if (asked === undefined) {
+      asked = new Set<string>();
+      this.#askedFor.set(sessionId, asked);
+    }
+    if (asked.has(messageId)) return false;
+    asked.add(messageId);
+    return true;
+  }
+
+  /**
+   * Whether the surface has been checked for this message and does not hold it.
+   *
+   * This is the operator-facing half of {@link needsRefreshFor}: it distinguishes
+   * "not looked yet" from "looked, and it is gone", which is the difference
+   * between a control that is briefly busy and one that will never work.
+   */
+  isOffSurface(sessionId: string, messageId: string | null): boolean {
+    if (messageId === null) return false;
+    const asked = this.#askedFor.get(sessionId);
+    return asked !== undefined && asked.has(messageId) && !this.knows(sessionId, messageId);
+  }
+
+  /**
    * Re-read the surface, leaving annotations untouched.
    *
    * `turns` is the source of every count and every panel row, so a turn that
@@ -256,11 +390,70 @@ export class AnnotationController {
       turns,
       messages: flatten(turns),
       stats: computeStats(turns, view.byMessageId, this.#policy),
+      // A refresh that succeeded is proof the host can serve this session, so it
+      // also clears a terminal `session-not-loaded`/`failed` phase. Without this
+      // a session whose first read lost the race would stay disabled forever
+      // even though its surface arrived here.
+      phase: 'ready',
+      error: null,
     });
   }
 
-  /** Fetch annotations and the surface for one session. */
-  async load(sessionId: string): Promise<void> {
+  /**
+   * Read annotations and the surface for one session, retrying a transient
+   * failure until the host has the session loaded.
+   *
+   * Resolves after the *first* attempt; a scheduled retry continues in the
+   * background and reports through {@link view}. That keeps `await load()` a
+   * single round trip for callers while still converging on its own — which is
+   * what the annotation controls need, since they have no way to observe the
+   * host loading a session.
+   */
+  load(sessionId: string): Promise<void> {
+    return this.#attempt(sessionId, true);
+  }
+
+  /**
+   * One attempt, preceded by cancelling whatever was pending.
+   *
+   * `reset` distinguishes an explicit request (a mount, the reload button, a
+   * panel open) from the automatic retry that follows a transient failure: only
+   * the former restarts the schedule, so a retry cannot extend itself forever.
+   */
+  #attempt(sessionId: string, reset: boolean): Promise<void> {
+    const inflight = this.#inflight.get(sessionId);
+    if (inflight !== undefined) return inflight;
+    if (reset) this.#attempts.delete(sessionId);
+    this.#cancelRetry(sessionId);
+
+    const view = this.view(sessionId);
+    if (view.phase !== 'loading') {
+      this.#commit(sessionId, { ...view, phase: 'loading', error: null });
+    }
+
+    const run = this.#runOnce(sessionId).finally(() => {
+      this.#inflight.delete(sessionId);
+    });
+    this.#inflight.set(sessionId, run);
+    return run;
+  }
+
+  /** Cancel a scheduled retry for one session, or for every session. */
+  #cancelRetry(sessionId?: string): void {
+    if (sessionId === undefined) {
+      for (const cancel of this.#retries.values()) cancel();
+      this.#retries.clear();
+      return;
+    }
+    const cancel = this.#retries.get(sessionId);
+    if (cancel !== undefined) {
+      cancel();
+      this.#retries.delete(sessionId);
+    }
+  }
+
+  /** Perform one read and decide what the failure, if any, means. */
+  async #runOnce(sessionId: string): Promise<void> {
     try {
       const [annotation, surface] = await Promise.all([
         this.#rpc.call<{ records: readonly AnnotationRecord[] }>('annotations.list', { sessionId }),
@@ -272,20 +465,42 @@ export class AnnotationController {
       // land in between. See #clearMixedTurns for why they are dropped rather
       // than completed.
       await this.#clearMixedTurns(sessionId, surface.turns, byMessageId);
+      this.#attempts.delete(sessionId);
       this.#commit(sessionId, {
         sessionId,
         byMessageId,
         turns: surface.turns,
         messages: flatten(surface.turns),
         stats: computeStats(surface.turns, byMessageId, this.#policy),
-        loaded: true,
+        phase: 'ready',
         error: null,
       });
     } catch (error) {
+      const code = codeOf(error);
+      const message = error instanceof Error ? error.message : String(error);
+      const spent = this.#attempts.get(sessionId) ?? 0;
+      const delay = TRANSIENT_CODES.has(code) ? this.#retryDelays[spent] : undefined;
+
+      if (delay !== undefined) {
+        this.#attempts.set(sessionId, spent + 1);
+        // Stay in `loading`: the operator sees a load in progress, which is what
+        // this is, rather than a failure that then heals by itself.
+        this.#commit(sessionId, { ...this.view(sessionId), phase: 'loading', error: null });
+        this.#retries.set(
+          sessionId,
+          this.#schedule(() => {
+            this.#retries.delete(sessionId);
+            void this.#attempt(sessionId, false);
+          }, delay),
+        );
+        return;
+      }
+
+      this.#attempts.delete(sessionId);
       this.#commit(sessionId, {
         ...this.view(sessionId),
-        loaded: true,
-        error: error instanceof Error ? error.message : String(error),
+        phase: code === 'not-found' ? 'session-not-loaded' : 'failed',
+        error: message,
       });
     }
   }

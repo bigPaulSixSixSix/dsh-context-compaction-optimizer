@@ -40,6 +40,16 @@
   width: calc(15px + var(--dsh-content-font-delta, 0px));
   height: calc(15px + var(--dsh-content-font-delta, 0px));
 }
+/*
+ * Wrapper for an inert control. A `disabled` button dispatches no mouse events,
+ * so a tooltip attached to one never opens and its label never reaches the
+ * operator — the mechanism behind "grey, and no reason given". This wrapper is a
+ * live element that carries the label instead (N049).
+ */
+.cco-action-wrap {
+  display: inline-flex;
+  align-items: center;
+}
 .cco-action:hover {
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-secondary);

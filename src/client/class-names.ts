@@ -25,6 +25,7 @@ export const STYLE_TAG_ID = 'dsh-context-compaction-optimizer/styles.css';
  */
 export const CLASS = {
   action: 'cco-action',
+  actionWrap: 'cco-action-wrap',
   trigger: 'cco-trigger',
   count: 'cco-count',
   overlay: 'cco-overlay',

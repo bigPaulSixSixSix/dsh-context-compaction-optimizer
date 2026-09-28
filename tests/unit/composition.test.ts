@@ -17,7 +17,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { access, readFile } from 'node:fs/promises';
+import { access, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const ROOT = process.cwd();
@@ -145,12 +145,14 @@ test('the declared license has a matching file', async () => {
 
 /**
  * `lib/` is gitignored, so nothing tracked guarantees a fresh build at publish
- * time. `prepublishOnly` is what closes that gap; without it a publish ships
- * whatever happens to be on disk.
+ * time. `prepack` is what closes that gap; without it a publish ships whatever
+ * happens to be on disk. It is preferred over `prepublishOnly` because it also
+ * runs for `npm pack`, so the tarball an operator inspects is built the same way
+ * as the one that gets published.
  */
 test('publishing rebuilds the artifacts it ships', () => {
   const scripts = (manifest as { scripts?: Record<string, string> }).scripts ?? {};
-  assert.match(scripts['prepublishOnly'] ?? '', /build\.mjs/, 'a publish must rebuild lib/');
+  assert.match(scripts['prepack'] ?? '', /build\.mjs/, 'a publish must rebuild lib/');
 });
 
 test('the manifest names the repository a consumer or a badge would link to', () => {
@@ -179,4 +181,29 @@ test('harness services stay peer dependencies, not bundled dependencies', () => 
   for (const spec of Object.keys(manifest.peerDependencies ?? {})) {
     assert.match(spec, /^(@deepseek-ai\/|zod$|@deepseek-ai\/schemastery$)/, `unexpected peer ${spec}`);
   }
+});
+
+/** Every `*.test.ts` under `tests/`, as workspace-relative POSIX paths. */
+async function testFiles(dir: string): Promise<string[]> {
+  const out: string[] = [];
+  for (const entry of await readdir(join(ROOT, dir), { withFileTypes: true })) {
+    const relative = `${dir}/${entry.name}`;
+    if (entry.isDirectory()) out.push(...(await testFiles(relative)));
+    else if (entry.name.endsWith('.test.ts')) out.push(relative);
+  }
+  return out;
+}
+
+/**
+ * The runner imports each test module explicitly — it cannot spawn, so it cannot
+ * glob at run time (N014). That makes an un-imported file a test that never runs
+ * while the suite still reports green, and nothing would say so. This closes it.
+ */
+test('every test file is imported by the runner', async () => {
+  const runner = await readFile(join(ROOT, 'scripts/run-tests.ts'), 'utf8');
+  const files = await testFiles('tests');
+
+  assert.ok(files.length > 10, `expected the test suite, saw ${files.length} files`);
+  const unrun = files.filter((file) => !runner.includes(file)).sort();
+  assert.deepEqual(unrun, [], 'these test files are never imported, so they never run');
 });

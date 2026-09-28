@@ -121,14 +121,21 @@ function listTurnRanges(session: SessionLike): readonly TurnRange[] {
 /**
  * Group the current surface into turns: the unit the operator annotates.
  *
- * Both lists are seq-ordered, so grouping is one merge pass. A surface message
- * no turn encloses becomes its own group — a compaction checkpoint is appended
- * outside any turn, and folding it into a neighbouring turn would misattribute
- * it.
+ * Both lists are taken in seq order — see below for why the surface's own order
+ * cannot be used — so grouping is one merge pass. A surface message no turn
+ * encloses becomes its own group — a compaction checkpoint is appended outside
+ * any turn, and folding it into a neighbouring turn would misattribute it.
  */
 export function listTurns(session: unknown, headLimit: number = DEFAULT_HEAD_LIMIT): readonly SurfaceTurn[] {
   const messages = listSurface(session, headLimit);
   if (messages.length === 0) return [];
+  // N049: `surface.nodes` is NOT seq-ascending once a compaction has run. The
+  // checkpoint replaces the summarized prefix, so it is placed *before* the
+  // verbatim-retained tail — whose seqs are lower. Assuming ascending order made
+  // the merge below drop out of its turn range immediately and emit one bogus
+  // single-message group per message, on every compacted session. The order here
+  // is for reading, not for the model: the digest reads the request, never this.
+  const ordered = [...messages].sort((left, right) => left.seq - right.seq);
   const ranges =
     typeof session === 'object' && session !== null ? listTurnRanges(session as SessionLike) : [];
 
@@ -136,13 +143,13 @@ export function listTurns(session: unknown, headLimit: number = DEFAULT_HEAD_LIM
   let cursor = 0;
   for (const range of ranges) {
     // Anything before this turn opened belongs to no turn.
-    while (cursor < messages.length && (messages[cursor] as SurfaceMessage).seq <= range.start) {
-      turns.push(looseTurn(messages[cursor] as SurfaceMessage));
+    while (cursor < ordered.length && (ordered[cursor] as SurfaceMessage).seq <= range.start) {
+      turns.push(looseTurn(ordered[cursor] as SurfaceMessage));
       cursor += 1;
     }
     const bucket: SurfaceMessage[] = [];
-    while (cursor < messages.length) {
-      const message = messages[cursor] as SurfaceMessage;
+    while (cursor < ordered.length) {
+      const message = ordered[cursor] as SurfaceMessage;
       if (range.end !== null && message.seq >= range.end) break;
       bucket.push(message);
       cursor += 1;
@@ -152,8 +159,8 @@ export function listTurns(session: unknown, headLimit: number = DEFAULT_HEAD_LIM
       turns.push({ id: `turn:${first.seq}`, startSeq: first.seq, endSeq: range.end, messages: bucket });
     }
   }
-  while (cursor < messages.length) {
-    turns.push(looseTurn(messages[cursor] as SurfaceMessage));
+  while (cursor < ordered.length) {
+    turns.push(looseTurn(ordered[cursor] as SurfaceMessage));
     cursor += 1;
   }
   return turns;
